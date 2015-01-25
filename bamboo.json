@@ -8,9 +8,7 @@
     "InstanceType" : {
       "Description" : "EC2 instance type",
       "Type" : "String",
-      "Default" : "m1.small",
-      "AllowedValues" : [ "t1.micro","m1.small","m1.medium","m1.large","m1.xlarge","m2.xlarge","m2.2xlarge","m2.4xlarge","m3.xlarge","m3.2xlarge","c1.medium","c1.xlarge","cc1.4xlarge","cc2.8xlarge","cg1.4xlarge"],
-      "ConstraintDescription" : "must be a valid EC2 instance type."
+      "Default" : "m1.small"
     },
     "KeyName" : {
       "Description" : "Existing EC2 KeyPair to be associated with all cluster instances for SSH access. For default AMIs, log in as the 'ubuntu' user.",
@@ -33,9 +31,13 @@
       "Description" : "Security group ID for ZK clients (should grant access to ZK nodes)",
       "Type" : "String"
     },
-    "MarathonServerSecurityGroup" : {
-      "Description" : "Security group ID for Marathon servers (this will be granted access to Bamboo's callback URL for Marathon events).",
+    "MarathonPeerSecurityGroup" : {
+      "Description" : "Security group ID for Marathon peers. This will be granted access to Bamboo's callback URL for Marathon events and allow Bamboo to access marathon.",
       "Type" : "String"
+    },
+    "MesosSlaveClientSecurityGroup" : {
+        "Description": "Security group ID for granting full access to the Mesos slaves, so that HA Proxy can actually route requests.",
+        "Type" : "String"
     },
     "BambooDockerImage" : {
       "Description" : "The bamboo Docker image (format: 'registry:port/repository:version')",
@@ -63,6 +65,10 @@
       "Description" : "(Optional) If passed, only launch nodes in these AZs (e.g., 'us-east-1a,us-east-1b'). Note: these must match the passed Subnets.",
       "Type" : "CommaDelimitedList",
       "Default" : ""
+    },
+    "SSLCertificateId": {
+        "Description": "An SSL certificate ID to use for the ELB.",
+        "Type": "String"
     }
   },
 
@@ -289,7 +295,13 @@
       "Properties" : {
         "KeyName" : { "Ref" : "KeyName" },
         "ImageId" : { "Fn::FindInMap" : [ "RegionMap", { "Ref" : "AWS::Region" }, "AMI"] },
-        "SecurityGroups" : [ { "Ref" : "ServerSecurityGroup" }, { "Ref" : "AdminSecurityGroup" }, { "Ref" : "ZkClientSecurityGroup" } ],
+        "SecurityGroups" : [
+            { "Ref" : "ServerSecurityGroup" },
+            { "Ref" : "AdminSecurityGroup" },
+            { "Ref" : "ZkClientSecurityGroup" },
+            { "Ref" : "MarathonPeerSecurityGroup" },
+            { "Ref" : "MesosSlaveClientSecurityGroup" }
+        ],
         "AssociatePublicIpAddress": "true",
         "InstanceType" : { "Ref" : "InstanceType" },
         "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
@@ -349,8 +361,7 @@
         "GroupDescription" : "bamboo server",
         "VpcId" : { "Ref" : "VpcId" },
         "SecurityGroupIngress" : [ 
-          { "IpProtocol" : "-1", "FromPort" : "0", "ToPort" : "65535", "SourceSecurityGroupId" : { "Ref" : "LbSecurityGroup"} },
-          { "IpProtocol" : "tcp", "FromPort" : "8000", "ToPort" : "8000", "SourceSecurityGroupId" : { "Ref" : "MarathonServerSecurityGroup"} }
+          { "IpProtocol" : "-1", "FromPort" : "0", "ToPort" : "65535", "SourceSecurityGroupId" : { "Ref" : "LbSecurityGroup"} }
         ]
       }
     },
@@ -361,13 +372,14 @@
         "SecurityGroups": [{ "Ref": "LbSecurityGroup" }, { "Ref" : "AdminSecurityGroup" }],
         "Subnets": { "Ref": "Subnets" },
         "Listeners" : [{
-          "LoadBalancerPort" : "80",
-          "Protocol" : "HTTP",
-          "InstancePort" : "80",
-          "InstanceProtocol" : "HTTP"
+          "Protocol" : "HTTPS",
+          "LoadBalancerPort" : "443",
+          "SSLCertificateId": { "Ref": "SSLCertificateId" },
+          "InstanceProtocol" : "HTTP",
+          "InstancePort" : "80"
         }],
         "HealthCheck" : {
-          "Target" : "HTTP:8000/",
+          "Target" : "HTTP:8000/status",
           "HealthyThreshold" : "2",
           "UnhealthyThreshold" : "2",
           "Interval" : "5",
@@ -382,10 +394,10 @@
   },
 
   "Outputs" : {
-    "BambooEndpoint" : {
-      "Description" : "Bamboo Endpoint",
+    "HAProxyUrl" : {
+      "Description" : "ELB for HA Proxy",
       "Value" :  { "Fn::Join" : ["", [
-        "http://", { "Fn::GetAtt" : [ "ElasticLoadBalancer", "DNSName" ]}, ":8000"
+        "http://", { "Fn::GetAtt" : [ "ElasticLoadBalancer", "DNSName" ]}
       ]]}
     }
   }
